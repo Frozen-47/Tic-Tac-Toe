@@ -3,12 +3,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import { User, Bot, RefreshCw, Home, Sparkles } from 'lucide-react';
 
 type Player = 'X' | 'O';
-type GameMode = 'pvp' | 'pvc-easy' | 'pvc-medium';
+type GameMode = 'pvp' | 'pvc-easy' | 'pvc-medium' | 'pvc-hard';
+type GameVariant = 'normal' | 'dynamic';
 
 const WIN_LINES = [
-  [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
-  [0, 3, 6], [1, 4, 7], [2, 5, 8], // Cols
-  [0, 4, 8], [2, 4, 6]             // Diagonals
+  [0, 1, 2], [3, 4, 5], [6, 7, 8],
+  [0, 3, 6], [1, 4, 7], [2, 5, 8],
+  [0, 4, 8], [2, 4, 6]
 ];
 
 const checkWin = (board: (Player | null)[]) => {
@@ -21,10 +22,10 @@ const checkWin = (board: (Player | null)[]) => {
   return null;
 };
 
-const isWinningMove = (player: Player, index: number, currentBoard: (Player | null)[], playerMoves: number[]) => {
+const isWinningMove = (player: Player, index: number, currentBoard: (Player | null)[], playerMoves: number[], variant: GameVariant) => {
   const newBoard = [...currentBoard];
   newBoard[index] = player;
-  if (playerMoves.length === 3) {
+  if (variant === 'dynamic' && playerMoves.length === 3) {
     newBoard[playerMoves[0]] = null;
   }
   const win = checkWin(newBoard);
@@ -67,19 +68,20 @@ const playSound = (type: 'click' | 'win' | 'vanish') => {
       osc.start();
       osc.stop(ctx.currentTime + 0.2);
     }
-  } catch (e) {
-    console.error("Audio play failed", e);
-  }
+  } catch (e) {}
 };
 
 export default function App() {
   const [gameMode, setGameMode] = useState<GameMode | null>(null);
+  const [showPvcOptions, setShowPvcOptions] = useState(false);
+  const [gameVariant, setGameVariant] = useState<GameVariant>('dynamic');
   const [board, setBoard] = useState<(Player | null)[]>(Array(9).fill(null));
   const [movesX, setMovesX] = useState<number[]>([]);
   const [movesO, setMovesO] = useState<number[]>([]);
   const [currentPlayer, setCurrentPlayer] = useState<Player>('X');
   const [winner, setWinner] = useState<Player | null>(null);
   const [winningLine, setWinningLine] = useState<number[] | null>(null);
+  const [isDraw, setIsDraw] = useState(false);
 
   const resetGame = () => {
     setBoard(Array(9).fill(null));
@@ -88,17 +90,18 @@ export default function App() {
     setCurrentPlayer('X');
     setWinner(null);
     setWinningLine(null);
+    setIsDraw(false);
   };
 
   const handleHome = () => {
     setGameMode(null);
+    setShowPvcOptions(false);
     resetGame();
   };
 
   const handleCellClick = (index: number) => {
-    if (winner || board[index] !== null) return;
-    if (gameMode?.startsWith('pvc') && currentPlayer === 'O') return; // Prevent clicking during AI turn
-
+    if (winner || isDraw || board[index] !== null) return;
+    if (gameMode?.startsWith('pvc') && currentPlayer === 'O') return;
     makeMove(index);
   };
 
@@ -110,7 +113,7 @@ export default function App() {
       newBoard[index] = currentPlayer;
       
       const currentMoves = currentPlayer === 'X' ? movesX : movesO;
-      if (currentMoves.length === 3) {
+      if (gameVariant === 'dynamic' && currentMoves.length === 3) {
         newBoard[currentMoves[0]] = null;
         playSound('vanish');
       }
@@ -120,13 +123,13 @@ export default function App() {
     if (currentPlayer === 'X') {
       setMovesX(prev => {
         const newMoves = [...prev, index];
-        if (newMoves.length > 3) newMoves.shift();
+        if (gameVariant === 'dynamic' && newMoves.length > 3) newMoves.shift();
         return newMoves;
       });
     } else {
       setMovesO(prev => {
         const newMoves = [...prev, index];
-        if (newMoves.length > 3) newMoves.shift();
+        if (gameVariant === 'dynamic' && newMoves.length > 3) newMoves.shift();
         return newMoves;
       });
     }
@@ -140,11 +143,13 @@ export default function App() {
       setWinner(winInfo.winner);
       setWinningLine(winInfo.line);
       playSound('win');
+    } else if (!board.includes(null) && gameVariant === 'normal') {
+      setIsDraw(true);
     }
-  }, [board]);
+  }, [board, gameVariant]);
 
   useEffect(() => {
-    if (winner) return;
+    if (winner || isDraw) return;
     if (gameMode?.startsWith('pvc') && currentPlayer === 'O') {
       const timer = setTimeout(() => {
         const emptyIndices = board.map((v, i) => v === null ? i : null).filter(v => v !== null) as number[];
@@ -152,18 +157,16 @@ export default function App() {
 
         let moveIndex = -1;
 
-        if (gameMode === 'pvc-medium') {
-          // 1. Check if AI can win
+        if (gameMode === 'pvc-medium' || gameMode === 'pvc-hard') {
           for (let i of emptyIndices) {
-            if (isWinningMove('O', i, board, movesO)) {
+            if (isWinningMove('O', i, board, movesO, gameVariant)) {
               moveIndex = i;
               break;
             }
           }
-          // 2. Check if Player can win and block
           if (moveIndex === -1) {
             for (let i of emptyIndices) {
-              if (isWinningMove('X', i, board, movesX)) {
+              if (isWinningMove('X', i, board, movesX, gameVariant)) {
                 moveIndex = i;
                 break;
               }
@@ -171,36 +174,66 @@ export default function App() {
           }
         }
 
-        // 3. Random move
+        if (gameMode === 'pvc-hard' && moveIndex === -1) {
+          if (board[4] === null) {
+            moveIndex = 4;
+          } else {
+            const corners = [0, 2, 6, 8].filter(i => board[i] === null);
+            if (corners.length > 0) {
+              moveIndex = corners[Math.floor(Math.random() * corners.length)];
+            } else {
+              const sides = [1, 3, 5, 7].filter(i => board[i] === null);
+              if (sides.length > 0) {
+                moveIndex = sides[Math.floor(Math.random() * sides.length)];
+              }
+            }
+          }
+        }
+
         if (moveIndex === -1) {
           moveIndex = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
         }
 
         makeMove(moveIndex);
-      }, 600); // slight delay for AI
+      }, 600);
       return () => clearTimeout(timer);
     }
-  }, [currentPlayer, gameMode, winner, board, movesX, movesO]);
+  }, [currentPlayer, gameMode, winner, isDraw, board, movesX, movesO, gameVariant]);
 
   if (!gameMode) {
     return (
       <div className="home-container">
         <div className="home-title">
-          <h1>SHIFT<br/>TAC TOE</h1>
-          <p>The 3-Move Limit Game</p>
+          <h1>{gameVariant === 'dynamic' ? 'SHIFT' : 'CLASSIC'}<br/>TAC TOE</h1>
+          <p>{gameVariant === 'dynamic' ? 'The 3-Move Limit Game' : 'The Classic 3-in-a-Row Game'}</p>
+        </div>
+
+        <div style={{ display: 'flex', gap: '16px', marginBottom: '16px' }}>
+          <button className={`btn ${gameVariant === 'normal' ? '' : 'btn-outline'}`} onClick={() => setGameVariant('normal')}>Normal</button>
+          <button className={`btn ${gameVariant === 'dynamic' ? '' : 'btn-outline'}`} onClick={() => setGameVariant('dynamic')}>Dynamic</button>
         </div>
 
         <div className="home-menu">
-          <button className="btn" onClick={() => setGameMode('pvp')}>Play vs Player</button>
-          <button className="btn" onClick={() => setGameMode('pvc-easy')}>Play vs Computer (Easy)</button>
-          <button className="btn" onClick={() => setGameMode('pvc-medium')}>Play vs Computer (Medium)</button>
+          {!showPvcOptions ? (
+            <>
+              <button className="btn" onClick={() => setGameMode('pvp')}>Player vs Player</button>
+              <button className="btn" onClick={() => setShowPvcOptions(true)}>Player vs Computer</button>
+            </>
+          ) : (
+            <>
+              <button className="btn" onClick={() => setGameMode('pvc-easy')}>Easy</button>
+              <button className="btn" onClick={() => setGameMode('pvc-medium')}>Medium</button>
+              <button className="btn" onClick={() => setGameMode('pvc-hard')}>Hard</button>
+              <button className="btn btn-outline" onClick={() => setShowPvcOptions(false)}>Back</button>
+            </>
+          )}
         </div>
       </div>
     );
   }
 
   const getVanishingIndex = () => {
-    if (winner) return -1;
+    if (gameVariant === 'normal' || winner || isDraw) return -1;
     if (currentPlayer === 'X' && movesX.length === 3) return movesX[0];
     if (currentPlayer === 'O' && movesO.length === 3) return movesO[0];
     return -1;
@@ -212,8 +245,8 @@ export default function App() {
     <>
       <header className="header">
         <div className="title-group">
-          <h1>SHIFT<br/>TAC TOE</h1>
-          <p>The 3-Move Limit Game</p>
+          <h1>{gameVariant === 'dynamic' ? 'SHIFT' : 'CLASSIC'}<br/>TAC TOE</h1>
+          <p>{gameVariant === 'dynamic' ? 'The 3-Move Limit Game' : 'The Classic 3-in-a-Row Game'}</p>
         </div>
         {vanishingIndex !== -1 && (
           <div className="vanishing-alert">
@@ -232,10 +265,11 @@ export default function App() {
 
           <div className="ai-selector">
             <div className="label">Game Mode</div>
-            <div className="difficulty-tabs">
+            <div className="difficulty-tabs" style={{flexWrap: 'wrap', gap: '4px'}}>
               <div className={`tab ${gameMode === 'pvp' ? 'active' : ''}`} onClick={() => { setGameMode('pvp'); resetGame(); }}>PVP</div>
-              <div className={`tab ${gameMode === 'pvc-easy' ? 'active' : ''}`} onClick={() => { setGameMode('pvc-easy'); resetGame(); }}>AI (EASY)</div>
-              <div className={`tab ${gameMode === 'pvc-medium' ? 'active' : ''}`} onClick={() => { setGameMode('pvc-medium'); resetGame(); }}>AI (MED)</div>
+              <div className={`tab ${gameMode === 'pvc-easy' ? 'active' : ''}`} onClick={() => { setGameMode('pvc-easy'); resetGame(); }}>EASY</div>
+              <div className={`tab ${gameMode === 'pvc-medium' ? 'active' : ''}`} onClick={() => { setGameMode('pvc-medium'); resetGame(); }}>MED</div>
+              <div className={`tab ${gameMode === 'pvc-hard' ? 'active' : ''}`} onClick={() => { setGameMode('pvc-hard'); resetGame(); }}>HARD</div>
             </div>
           </div>
         </div>
@@ -247,7 +281,7 @@ export default function App() {
               <button
                 key={i}
                 onClick={() => handleCellClick(i)}
-                disabled={!!winner || cell !== null || (gameMode.startsWith('pvc') && currentPlayer === 'O')}
+                disabled={!!winner || !!isDraw || cell !== null || (gameMode.startsWith('pvc') && currentPlayer === 'O')}
                 className={`cell ${cell ? cell.toLowerCase() : ''} ${isVanishing ? 'expiring' : ''}`}
               >
                 {cell}
@@ -258,31 +292,35 @@ export default function App() {
         </div>
 
         <div className="side-panel">
-          <div className="label">Move History (X)</div>
-          <div className="queue-viz">
-            {[0, 1, 2].map((i) => {
-              const move = movesX[i];
-              const isFirst = movesX.length === 3 && i === 0;
-              return (
-                <div key={i} className={`queue-dot ${isFirst ? 'first' : ''}`}>
-                  {move !== undefined ? i + 1 : '-'}
-                </div>
-              );
-            })}
-          </div>
-          
-          <div className="label" style={{ marginTop: '24px' }}>Move History (O)</div>
-          <div className="queue-viz">
-            {[0, 1, 2].map((i) => {
-              const move = movesO[i];
-              const isFirst = movesO.length === 3 && i === 0;
-              return (
-                <div key={i} className={`queue-dot ${isFirst ? 'first' : ''}`}>
-                  {move !== undefined ? i + 1 : '-'}
-                </div>
-              );
-            })}
-          </div>
+          {gameVariant === 'dynamic' && (
+            <>
+              <div className="label">Move History (X)</div>
+              <div className="queue-viz">
+                {[0, 1, 2].map((i) => {
+                  const move = movesX[i];
+                  const isFirst = movesX.length === 3 && i === 0;
+                  return (
+                    <div key={i} className={`queue-dot ${isFirst ? 'first' : ''}`}>
+                      {move !== undefined ? i + 1 : '-'}
+                    </div>
+                  );
+                })}
+              </div>
+              
+              <div className="label" style={{ marginTop: '24px' }}>Move History (O)</div>
+              <div className="queue-viz">
+                {[0, 1, 2].map((i) => {
+                  const move = movesO[i];
+                  const isFirst = movesO.length === 3 && i === 0;
+                  return (
+                    <div key={i} className={`queue-dot ${isFirst ? 'first' : ''}`}>
+                      {move !== undefined ? i + 1 : '-'}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -292,7 +330,7 @@ export default function App() {
           <button className="btn btn-outline" onClick={handleHome}>Exit to Menu</button>
         </div>
         <div className="label">
-          {winner ? `WINNER: PLAYER ${winner}` : `Pieces: X [0${movesX.length}] — O [0${movesO.length}]`}
+          {winner ? `WINNER: PLAYER ${winner}` : isDraw ? 'DRAW!' : `Pieces: X [0${movesX.length}] — O [0${movesO.length}]`}
         </div>
       </footer>
     </>

@@ -1,0 +1,6 @@
+{
+  "name": "Dynamic Tic-Tac-Toe",
+  "description": "A twist on the classic game where each player can only have 3 moves. The oldest move disappears!",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
